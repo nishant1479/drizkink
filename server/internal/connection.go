@@ -102,7 +102,7 @@ func HandleConnection(conn net.Conn, server *interfaces.Server) {
 	server.Mutex.Lock()
 	server.Connections[user.UserId] = user
 	server.IpAddresses[ip] = user
-	
+
 	// Initialize rooms map if not exists
 	if server.Rooms == nil {
 		server.Rooms = make(map[string]*interfaces.Room)
@@ -128,7 +128,7 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 			user.IsOnline = false
 			server.Mutex.Unlock()
 			offlineMsg := fmt.Sprintf("User %s is now offline", user.Username)
-			BroadcastMessage(offlineMsg, server, user)
+			BroadcastGlobalMessage(offlineMsg, server, user)
 			return
 		}
 
@@ -216,13 +216,13 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 			fileName := args[2]
 			fileSizeStr := strings.TrimSpace(args[3])
 			fileSize, err := strconv.ParseInt(fileSizeStr, 10, 64)
-			
+
 			// Include checksum in filename if provided
 			if len(args) == 5 {
 				checksum := strings.TrimSpace(args[4])
 				fileName = fileName + "|" + checksum
 			}
-			
+
 			if err != nil {
 				fmt.Println("Invalid fileSize. Use: /FILE_REQUEST <userId> <filename> <fileSize> [checksum]")
 				continue
@@ -240,13 +240,13 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 			folderName := args[2]
 			folderSizeStr := strings.TrimSpace(args[3])
 			folderSize, err := strconv.ParseInt(folderSizeStr, 10, 64)
-			
+
 			// Include checksum in foldername if provided
 			if len(args) == 5 {
 				checksum := strings.TrimSpace(args[4])
 				folderName = folderName + "|" + checksum
 			}
-			
+
 			if err != nil {
 				fmt.Println("Invalid folderSize. Use: /FOLDER_REQUEST <userId> <folderName> <folderSize> [checksum]")
 				continue
@@ -335,16 +335,16 @@ func BroadcastGlobalMessage(content string, server *interfaces.Server, sender *i
 func BroadcastRoomMessage(content string, server *interfaces.Server, sender *interfaces.User, roomId string) {
 	server.Mutex.Lock()
 	defer server.Mutex.Unlock()
-	
+
 	room, exists := server.Rooms[roomId]
 	if !exists {
 		_, _ = sender.Conn.Write([]byte("❌ Room not found\n"))
 		return
 	}
-	
+
 	room.Mutex.Lock()
 	defer room.Mutex.Unlock()
-	
+
 	for _, participant := range room.Participants {
 		if participant.IsOnline && participant != sender {
 			_, _ = participant.Conn.Write([]byte(fmt.Sprintf("[%s] %s: %s\n", room.RoomName, sender.Username, content)))
