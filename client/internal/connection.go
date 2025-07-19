@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var currentRoom string
+
 func Connect(address string) (net.Conn, error) {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
@@ -137,6 +139,15 @@ func ReadLoop(conn net.Conn) {
 				fmt.Println(utils.ErrorColor("❌ Error responding to heartbeat:"), err)
 				continue
 			}
+		case strings.HasPrefix(message, "🏠") || strings.Contains(message, "room"):
+			// Room-related messages
+			if strings.Contains(message, "created") || strings.Contains(message, "joined") || 
+			   strings.Contains(message, "left") || strings.Contains(message, "Selected") {
+				fmt.Println(utils.SuccessColor(message))
+			} else {
+				fmt.Println(utils.InfoColor(message))
+			}
+			continue
 		case message == "USERS:":
 			// Improved approach to accumulate the complete user list
 			fmt.Println(utils.HeaderColor("\n👥 Online Users:"))
@@ -166,26 +177,6 @@ func ReadLoop(conn net.Conn) {
 			for _, line := range strings.Split(userList, "\n") {
 				if strings.TrimSpace(line) != "" {
 					userCount++
-					// Enhanced formatting for username and ID
-					if strings.Contains(line, "[ID:") {
-						parts := strings.SplitN(line, "[ID:", 2)
-						if len(parts) == 2 {
-							username := strings.TrimSpace(parts[0])
-							idPart := strings.SplitN(parts[1], "]", 2)
-							if len(idPart) == 2 {
-								userId := strings.TrimSpace(idPart[0])
-								status := strings.TrimSpace(idPart[1])
-								fmt.Printf("%s %s %s %s %s\n",
-									utils.SuccessColor(" •"),
-									utils.UserColor(username),
-									utils.InfoColor("(ID:"),
-									utils.CommandColor(userId),
-									utils.InfoColor(")"+status))
-								continue
-							}
-						}
-					}
-					// Fallback to original formatting if parsing fails
 					fmt.Println(utils.SuccessColor(" • "), utils.UserColor(line))
 				}
 			}
@@ -251,6 +242,9 @@ func ReadLoop(conn net.Conn) {
 				fmt.Println(utils.WarningColor("🔄 " + message))
 			} else if strings.Contains(message, "is now offline") {
 				fmt.Println(utils.WarningColor("👋 " + message))
+			} else if strings.HasPrefix(message, "[") && strings.Contains(message, "]") {
+				// Room message format: [RoomName] Username: message
+				fmt.Println(utils.InfoColor(message))
 			} else {
 				fmt.Println(message)
 			}
@@ -261,7 +255,11 @@ func ReadLoop(conn net.Conn) {
 func WriteLoop(conn net.Conn) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Print(utils.CommandColor(">>> "))
+		prompt := ">>> "
+		if currentRoom != "" {
+			prompt = fmt.Sprintf("[Room: %s] >>> ", currentRoom)
+		}
+		fmt.Print(utils.CommandColor(prompt))
 		message, _ := reader.ReadString('\n')
 		message = strings.TrimSpace(message)
 		switch {
@@ -271,6 +269,82 @@ func WriteLoop(conn net.Conn) {
 			return
 		case message == "/help":
 			utils.PrintHelp()
+			continue
+		case strings.HasPrefix(message, "/createroom"):
+			args := strings.Fields(message)
+			if len(args) < 3 {
+				fmt.Println(utils.ErrorColor("❌ Invalid arguments. Use: /createroom <roomName> <userId1> [userId2] ..."))
+				continue
+			}
+			fmt.Println(utils.InfoColor("🏠 Creating room..."))
+			_, err := conn.Write([]byte(message))
+			if err != nil {
+				fmt.Println(utils.ErrorColor("❌ Error creating room:"), err)
+				continue
+			}
+			continue
+		case strings.HasPrefix(message, "/joinroom"):
+			args := strings.Fields(message)
+			if len(args) != 2 {
+				fmt.Println(utils.ErrorColor("❌ Invalid arguments. Use: /joinroom <roomId>"))
+				continue
+			}
+			fmt.Println(utils.InfoColor("🏠 Joining room..."))
+			_, err := conn.Write([]byte(message))
+			if err != nil {
+				fmt.Println(utils.ErrorColor("❌ Error joining room:"), err)
+				continue
+			}
+			continue
+		case strings.HasPrefix(message, "/leaveroom"):
+			args := strings.Fields(message)
+			if len(args) != 2 {
+				fmt.Println(utils.ErrorColor("❌ Invalid arguments. Use: /leaveroom <roomId>"))
+				continue
+			}
+			fmt.Println(utils.InfoColor("🏠 Leaving room..."))
+			_, err := conn.Write([]byte(message))
+			if err != nil {
+				fmt.Println(utils.ErrorColor("❌ Error leaving room:"), err)
+				continue
+			}
+			continue
+		case strings.HasPrefix(message, "/selectroom"):
+			args := strings.Fields(message)
+			if len(args) != 2 {
+				fmt.Println(utils.ErrorColor("❌ Invalid arguments. Use: /selectroom <roomId>"))
+				continue
+			}
+			roomId := args[1]
+			fmt.Println(utils.InfoColor("🏠 Selecting room..."))
+			_, err := conn.Write([]byte(message))
+			if err != nil {
+				fmt.Println(utils.ErrorColor("❌ Error selecting room:"), err)
+				continue
+			}
+			// Update local current room for prompt display
+			currentRoom = roomId
+			continue
+		case strings.HasPrefix(message, "/listrooms"):
+			fmt.Println(utils.InfoColor("🏠 Fetching room list..."))
+			_, err := conn.Write([]byte(message))
+			if err != nil {
+				fmt.Println(utils.ErrorColor("❌ Error listing rooms:"), err)
+				continue
+			}
+			continue
+		case strings.HasPrefix(message, "/roominfo"):
+			args := strings.Fields(message)
+			if len(args) != 2 {
+				fmt.Println(utils.ErrorColor("❌ Invalid arguments. Use: /roominfo <roomId>"))
+				continue
+			}
+			fmt.Println(utils.InfoColor("🏠 Fetching room information..."))
+			_, err := conn.Write([]byte(message))
+			if err != nil {
+				fmt.Println(utils.ErrorColor("❌ Error getting room info:"), err)
+				continue
+			}
 			continue
 		case strings.HasPrefix(message, "/sendfile"):
 			args := strings.SplitN(message, " ", 3)

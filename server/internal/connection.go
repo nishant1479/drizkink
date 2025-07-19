@@ -66,7 +66,7 @@ func HandleConnection(conn net.Conn, server *interfaces.Server) {
 
 		// Encrypt and broadcast welcome back message
 		welcomeMsg := fmt.Sprintf("User %s has rejoined the chat", existingUser.Username)
-		BroadcastMessage(welcomeMsg, server, existingUser)
+		BroadcastGlobalMessage(welcomeMsg, server, existingUser)
 
 		// Start handling messages for the reconnected user
 		handleUserMessages(conn, existingUser, server)
@@ -102,10 +102,15 @@ func HandleConnection(conn net.Conn, server *interfaces.Server) {
 	server.Mutex.Lock()
 	server.Connections[user.UserId] = user
 	server.IpAddresses[ip] = user
+	
+	// Initialize rooms map if not exists
+	if server.Rooms == nil {
+		server.Rooms = make(map[string]*interfaces.Room)
+	}
 	server.Mutex.Unlock()
 
 	welcomeMsg := fmt.Sprintf("User %s has joined the chat", username)
-	BroadcastMessage(welcomeMsg, server, user)
+	BroadcastGlobalMessage(welcomeMsg, server, user)
 
 	fmt.Printf("New user connected: %s (ID: %s)\n", username, userId)
 
@@ -135,7 +140,71 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 			user.IsOnline = false
 			server.Mutex.Unlock()
 			offlineMsg := fmt.Sprintf("User %s is now offline", user.Username)
-			BroadcastMessage(offlineMsg, server, user)
+			BroadcastGlobalMessage(offlineMsg, server, user)
+			return
+		case strings.HasPrefix(messageContent, "/createroom"):
+			args := strings.Fields(messageContent)
+			if len(args) < 3 {
+				_, err = conn.Write([]byte("❌ Invalid arguments. Use: /createroom <roomName> <userId1> [userId2] ...\n"))
+				if err != nil {
+					fmt.Println("Error sending create room error:", err)
+				}
+				continue
+			}
+			roomName := args[1]
+			participantIds := args[2:]
+			HandleCreateRoom(server, user, roomName, participantIds)
+			continue
+		case strings.HasPrefix(messageContent, "/joinroom"):
+			args := strings.Fields(messageContent)
+			if len(args) != 2 {
+				_, err = conn.Write([]byte("❌ Invalid arguments. Use: /joinroom <roomId>\n"))
+				if err != nil {
+					fmt.Println("Error sending join room error:", err)
+				}
+				continue
+			}
+			roomId := args[1]
+			HandleJoinRoom(server, user, roomId)
+			continue
+		case strings.HasPrefix(messageContent, "/leaveroom"):
+			args := strings.Fields(messageContent)
+			if len(args) != 2 {
+				_, err = conn.Write([]byte("❌ Invalid arguments. Use: /leaveroom <roomId>\n"))
+				if err != nil {
+					fmt.Println("Error sending leave room error:", err)
+				}
+				continue
+			}
+			roomId := args[1]
+			HandleLeaveRoom(server, user, roomId)
+			continue
+		case strings.HasPrefix(messageContent, "/selectroom"):
+			args := strings.Fields(messageContent)
+			if len(args) != 2 {
+				_, err = conn.Write([]byte("❌ Invalid arguments. Use: /selectroom <roomId>\n"))
+				if err != nil {
+					fmt.Println("Error sending select room error:", err)
+				}
+				continue
+			}
+			roomId := args[1]
+			HandleSelectRoom(server, user, roomId)
+			continue
+		case strings.HasPrefix(messageContent, "/listrooms"):
+			HandleListRooms(server, user)
+			continue
+		case strings.HasPrefix(messageContent, "/roominfo"):
+			args := strings.Fields(messageContent)
+			if len(args) != 2 {
+				_, err = conn.Write([]byte("❌ Invalid arguments. Use: /roominfo <roomId>\n"))
+				if err != nil {
+					fmt.Println("Error sending room info error:", err)
+				}
+				continue
+			}
+			roomId := args[1]
+			HandleRoomInfo(server, user, roomId)
 			return
 		case strings.HasPrefix(messageContent, "/FILE_REQUEST"):
 			args := strings.SplitN(messageContent, " ", 5) // Updated to include checksum
@@ -188,14 +257,21 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 		case messageContent == "PONG\n":
 			continue
 		case strings.HasPrefix(messageContent, "/status"):
-			_, err = conn.Write([]byte("USERS:"))
+			_, err = conn.Write([]byte("USERS:\n"))
 			if err != nil {
 				fmt.Println("Error sending user list header:", err)
 				continue
 			}
+			server.Mutex.Lock()
 			for _, user := range server.Connections {
 				if user.IsOnline {
-					statusMsg := fmt.Sprintf("%s (%s) is online\n", user.Username, user.UserId)
+					roomStatus := "No room"
+					if user.CurrentRoom != "" {
+						if room, exists := server.Rooms[user.CurrentRoom]; exists {
+							roomStatus = fmt.Sprintf("In room: %s", room.RoomName)
+						}
+					}
+					statusMsg := fmt.Sprintf("%s [ID: %s] - %s\n", user.Username, user.UserId, roomStatus)
 					_, err = conn.Write([]byte(statusMsg))
 					if err != nil {
 						fmt.Println("Error sending user list:", err)
@@ -203,6 +279,7 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 					}
 				}
 			}
+			server.Mutex.Unlock()
 			continue
 		case strings.HasPrefix(messageContent, "/LOOK"):
 			args := strings.SplitN(messageContent, " ", 2)
@@ -235,17 +312,42 @@ func handleUserMessages(conn net.Conn, user *interfaces.User, server *interfaces
 			HandleDownloadRequest(server, conn, senderId, recipientId, filePath)
 			continue
 		default:
-			BroadcastMessage(messageContent, server, user)
+			// Send message to current room or globally if no room selected
+			if user.CurrentRoom != "" {
+				BroadcastRoomMessage(messageContent, server, user, user.CurrentRoom)
+			} else {
+				BroadcastGlobalMessage(messageContent, server, user)
+			}
 		}
 	}
 }
 
-func BroadcastMessage(content string, server *interfaces.Server, sender *interfaces.User) {
+func BroadcastGlobalMessage(content string, server *interfaces.Server, sender *interfaces.User) {
 	server.Mutex.Lock()
 	defer server.Mutex.Unlock()
 	for _, recipient := range server.Connections {
 		if recipient.IsOnline && recipient != sender {
 			_, _ = recipient.Conn.Write([]byte(fmt.Sprintf("%s: %s\n", sender.Username, content)))
+		}
+	}
+}
+
+func BroadcastRoomMessage(content string, server *interfaces.Server, sender *interfaces.User, roomId string) {
+	server.Mutex.Lock()
+	defer server.Mutex.Unlock()
+	
+	room, exists := server.Rooms[roomId]
+	if !exists {
+		_, _ = sender.Conn.Write([]byte("❌ Room not found\n"))
+		return
+	}
+	
+	room.Mutex.Lock()
+	defer room.Mutex.Unlock()
+	
+	for _, participant := range room.Participants {
+		if participant.IsOnline && participant != sender {
+			_, _ = participant.Conn.Write([]byte(fmt.Sprintf("[%s] %s: %s\n", room.RoomName, sender.Username, content)))
 		}
 	}
 }
@@ -261,7 +363,7 @@ func StartHeartBeat(interval time.Duration, server *interfaces.Server) {
 					if err != nil {
 						fmt.Printf("User disconnected: %s\n", user.Username)
 						user.IsOnline = false
-						BroadcastMessage(fmt.Sprintf("User %s is now offline", user.Username), server, user)
+						BroadcastGlobalMessage(fmt.Sprintf("User %s is now offline", user.Username), server, user)
 					}
 				}
 			}
