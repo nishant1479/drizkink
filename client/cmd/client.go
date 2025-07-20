@@ -11,60 +11,61 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func discoverServers() []string {
-	fmt.Println(utils.InfoColor("🔍 Searching for available servers..."))
-
+	fmt.Println(utils.InfoColor("🔍 Searching for available servers via UDP broadcast..."))
 	var availableServers []string
 
-	// Common ports to check
-	ports := []string{"8080", "3000", "4000", "5000"}
-
-	// Get local network interfaces
-	interfaces, err := net.Interfaces()
+	// UDP broadcast
+	broadcastAddr := &net.UDPAddr{IP: net.IPv4bcast, Port: 9999}
+	conn, err := net.DialUDP("udp", nil, broadcastAddr)
 	if err != nil {
-		fmt.Println(utils.ErrorColor("❌ Error getting network interfaces:"), err)
+		fmt.Println(utils.ErrorColor("❌ Error sending UDP broadcast:"), err)
 		return availableServers
 	}
+	defer conn.Close()
 
-	for _, iface := range interfaces {
-		// Skip loopback and down interfaces
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-			continue
-		}
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
+	conn.Write([]byte("DRIZLINK_DISCOVER"))
 
-		addrs, err := iface.Addrs()
+	// Listen for responses
+	listenConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		fmt.Println(utils.ErrorColor("❌ Error listening for UDP responses:"), err)
+		return availableServers
+	}
+	defer listenConn.Close()
+
+	listenConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1024)
+	start := time.Now()
+	for time.Since(start) < 2*time.Second {
+		n, addr, err := listenConn.ReadFromUDP(buf)
 		if err != nil {
-			continue
+			break
 		}
-
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-				if ipnet.IP.To4() != nil {
-					// Check each port on this IP
-					for _, port := range ports {
-						serverAddr := ipnet.IP.String() + ":" + port
-						if available, _ := helper.CheckServerAvailability(serverAddr); available {
-							availableServers = append(availableServers, serverAddr)
-							fmt.Printf("  ✅ Found server at %s\n", utils.SuccessColor(serverAddr))
-						}
-					}
-				}
+		msg := string(buf[:n])
+		if strings.HasPrefix(msg, "DRIZLINK_SERVER:") {
+			port := strings.TrimPrefix(msg, "DRIZLINK_SERVER:")
+			serverAddr := fmt.Sprintf("%s:%s", addr.IP.String(), port)
+			if !contains(availableServers, serverAddr) {
+				availableServers = append(availableServers, serverAddr)
+				fmt.Printf("  ✅ Found server at %s\n", utils.SuccessColor(serverAddr))
 			}
 		}
 	}
+	return availableServers
+}
 
-	// Also check localhost
-	for _, port := range ports {
-		serverAddr := "localhost:" + port
-		if available, _ := helper.CheckServerAvailability(serverAddr); available {
-			availableServers = append(availableServers, serverAddr)
-			fmt.Printf("  ✅ Found server at %s\n", utils.SuccessColor(serverAddr))
+func contains(list []string, item string) bool {
+	for _, v := range list {
+		if v == item {
+			return true
 		}
 	}
-
-	return availableServers
+	return false
 }
 
 func promptForServerAddress() string {
