@@ -217,4 +217,23 @@ The application implements security measures including:
 
 This checksum process ensures that files and folders arrive exactly as they were sent, protecting against data corruption during transfer.
 
+## 🔍 New: LAN Peer Discovery (UDP Broadcast)
+
+DrizLink now supports automatic discovery of other users/servers on the same WiFi network using UDP broadcast!
+
+### How it works
+- When you start the client, it sends a UDP broadcast to find all available DrizLink servers on your LAN.
+- All running servers reply with their IP and port.
+- The client shows a list of discovered peers (your friends on the same WiFi).
+- You can select which peer(s) to connect to and create rooms or share files.
+
+### Steps
+1. **Start the server** on each device (your friends must run `go run ./server/cmd --port 8080` or similar).
+2. **Run the client** (`go run ./client/cmd`).
+3. When prompted, choose to search for available servers. The client will show all discovered peers.
+4. **Select the peer(s)** you want to connect to from the list.
+5. Proceed to create rooms and share files as usual!
+
+No need to manually enter IP addresses—just make sure all devices are on the same WiFi network.
+
 Made with ❤️ by the DrizLink Team
